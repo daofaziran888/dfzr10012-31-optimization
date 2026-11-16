@@ -6,11 +6,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
+from app.services.alarm_decision import AlarmDecisionService
 from app.services.metric import MetricService
 
 router = APIRouter(prefix="/api/metric", tags=["流作业指标采集"])
 
 service = MetricService()
+decision_service = AlarmDecisionService()
 
 LIST_FIELDS = ["采集器编号", "作业名称", "指标名称", "采集间隔", "聚合方式", "保留天数", "最近采集", "采集器状态"]
 STATUSES = ["草稿", "采集中", "已暂停", "已关闭"]
@@ -63,3 +65,27 @@ def export_entries() -> dict[str, Any]:
     """导出流作业指标采集清单：返回当前过滤条件下的全量数据。"""
     items, total = service.list_entries(page=1, size=10000)
     return {"module": "metric", "total": total, "items": items}
+
+
+@router.post("/{entry_id}/decision", response_model=ActionResult)
+def consume_decision(entry_id: int, payload: EntryPayload | None = None) -> ActionResult:
+    """另一个处理入口：从同一份告警判定结果里取当前有效判定，同步更新采集侧记录。"""
+    entry = service.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"指标采集器 {entry_id} 不存在或已归档")
+    values: dict[str, Any] = dict(payload.values if payload else {})
+    metric_name = str(entry.get("指标名称") or "")
+    values.setdefault("指标名称", metric_name)
+    rule = values.pop("规则编号", None) or decision_service.rule_for_metric(metric_name)
+    if rule is None:
+        return ActionResult(ok=False, message="该指标尚未关联告警规则，未更新采集侧记录")
+    result = decision_service.consume(None, {"规则编号": rule})
+    if result["ok"]:
+        entry["最近判定"] = result["判定编号"]
+        entry["最近判定版本"] = result["指标版本"]
+        entry["最近复核结论"] = result["复核结论"]
+    return ActionResult(
+        ok=bool(result["ok"]),
+        message=str(result["message"]),
+        entry=result["decision"],
+    )

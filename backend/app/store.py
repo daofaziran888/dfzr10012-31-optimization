@@ -4,9 +4,13 @@
 """
 from __future__ import annotations
 
-from typing import Any
+import copy
+from typing import Any, Iterable
 
 from app.seed import SEED_ROWS
+
+# 告警判定链路的内部表只服务判定结果，不计入运营概览的业务模块统计。
+INTERNAL_MODULES = {"metric_batch", "alarm_decision", "alarm_event"}
 
 
 class Store:
@@ -16,16 +20,33 @@ class Store:
         }
 
     def module_names(self) -> list[str]:
-        return sorted(self._tables)
+        return sorted(name for name in self._tables if name not in INTERNAL_MODULES)
 
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])
+
+    def reset(self) -> None:
+        """恢复到种子数据，测试和演示脚本用，避免上一次写入影响下一次核对。"""
+        self._tables = {
+            name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
+        }
 
     def find(self, module: str, entry_id: int) -> dict[str, Any] | None:
         for row in self.rows(module):
             if int(row.get("id", 0)) == entry_id:
                 return row
         return None
+
+    def snapshot(self, modules: Iterable[str]) -> dict[str, list[dict[str, Any]]]:
+        """给一次判定事务留底，中途抛异常时回滚到上一份一致结果。"""
+        return {
+            name: [copy.deepcopy(row) for row in self.rows(name)]
+            for name in modules
+        }
+
+    def restore(self, snapshot: dict[str, list[dict[str, Any]]]) -> None:
+        for name, rows in snapshot.items():
+            self._tables[name] = rows
 
     def overview(self) -> dict[str, object]:
         modules: list[dict[str, object]] = []

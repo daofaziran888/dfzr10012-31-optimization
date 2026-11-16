@@ -66,6 +66,30 @@ npm run dev
 | 自定义函数库 | `udf` | 函数定义 | 函数编号、函数名称、输入参数 |
 | 流处理日志中心 | `log` | 日志记录 | 记录编号、流作业名、日志级别 |
 
+## 告警判定链路
+
+`流告警规则`（ALAR）与`流作业指标采集`（METR）之间的批次重算收在
+`backend/app/services/alarm_decision.py`，兼容读取规则收在
+`backend/app/services/alarm_compat.py`。四个入口共用同一份判定结果：
+
+| 入口 | 接口 | 说明 |
+| --- | --- | --- |
+| 批次重算 | `POST /api/alarm/decisions/recompute` | 校验新批次并写入判定结果；同一规则并发只生成一个通知事件 |
+| 复核 | `POST /api/alarm/decisions/{判定编号}/review` | 复核失败时保留上一条有效结果，不重复通知 |
+| 静默判断 | `GET /api/alarm/silence?rule=...` | 只读取一个统一版本的当前有效判定 |
+| 消费 | `POST /api/alarm/decisions/{判定编号}/consume`、`POST /api/alarm/consume`、`POST /api/metric/{id}/decision` | 同步更新事件、批次、规则与采集器记录 |
+
+告警判定数据结果固定保留 `指标版本`、`复核结论`、`上一条有效结果`
+三个字段（同时兼容 `metric_version` / `review_conclusion` / `previous_valid_result` 等旧命名）。
+
+验收样例：`rule-window-latency-31` 在 `batch-31` 的 `avg-sample=860` 时
+只产生 `event-n31`；复核失败保留上一条有效结果。
+
+```bash
+cd backend
+.venv/bin/python -m unittest discover -s tests -v
+```
+
 ## 约定
 
 - 每个模块的前端页面在 `frontend/src/views/<模块>/index.vue`，后端接口在

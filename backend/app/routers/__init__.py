@@ -20,7 +20,8 @@ from app.routers import watermark as router_watermark
 from app.routers import parallel as router_parallel
 from app.routers import metric as router_metric
 from app.routers import alarm as router_alarm
+from app.routers import alarm_decision as router_alarm_decision
 from app.routers import udf as router_udf
 from app.routers import log as router_log
 
-ROUTERS = [router_streamin, router_operator, router_window, router_state, router_checkpoint, router_backpress, router_latency, router_jobops, router_sink, router_schema, router_watermark, router_parallel, router_metric, router_alarm, router_udf, router_log]
+ROUTERS = [router_streamin, router_operator, router_window, router_state, router_checkpoint, router_backpress, router_latency, router_jobops, router_sink, router_schema, router_watermark, router_parallel, router_metric, router_alarm_decision, router_alarm, router_udf, router_log]

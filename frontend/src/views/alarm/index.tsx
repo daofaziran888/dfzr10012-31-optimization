@@ -40,10 +40,34 @@ const stats = [
 ]
 
 type Row = Record<string, string | number | null>
+type Decision = Record<string, unknown>
+
+const decisionColumns = [
+  '判定编号',
+  '规则编号',
+  '指标版本',
+  '复核结论',
+  '复核状态',
+  '通知事件',
+  '上一条有效结果',
+]
+
+function previousVersion(value: unknown): string {
+  if (!value || typeof value !== 'object') {
+    return '—'
+  }
+  const previous = value as Record<string, unknown>
+  return String(previous['指标版本'] ?? previous.metric_version ?? '—')
+}
+
+function eventText(value: unknown): string {
+  return Array.isArray(value) && value.length > 0 ? value.join('、') : '—'
+}
 
 export default function AlarmView() {
   const [rows, setRows] = useState<Row[]>([])
   const [total, setTotal] = useState(0)
+  const [decisions, setDecisions] = useState<Decision[]>([])
   const [errorMessage, setErrorMessage] = useState('')
   const [filters, setFilters] = useState<Record<string, string>>({})
   const filterFields = useMemo(() => columns.slice(0, 3), [])
@@ -59,6 +83,11 @@ export default function AlarmView() {
       const payload = await response.json()
       setRows(payload.items ?? [])
       setTotal(payload.total ?? 0)
+      const decisionResponse = await request(`${ENDPOINT}/decisions?size=50`)
+      if (decisionResponse.ok) {
+        const decisionPayload = await decisionResponse.json()
+        setDecisions(decisionPayload.items ?? [])
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '流告警规则列表读取失败')
     }
@@ -68,20 +97,44 @@ export default function AlarmView() {
     void reload()
   }, [reload])
 
-  async function runAction(action: string, row: Row) {
+  async function post(path: string, body: Record<string, unknown>) {
     setErrorMessage('')
     try {
-      const response = await request(`${ENDPOINT}/${row.id}/actions`, {
+      const response = await request(path, {
         method: 'POST',
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ values: body }),
       })
+      const payload = await response.json().catch(() => ({}))
       if (!response.ok) {
-        throw new Error('流告警规则动作未生效，请稍后重试')
+        throw new Error(payload?.detail ?? '请求未生效，请稍后重试')
+      }
+      if (payload?.message) {
+        setErrorMessage(payload.message)
       }
       await reload()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '流告警规则操作失败')
     }
+  }
+
+  async function runAction(action: string, row: Row) {
+    await post(`${ENDPOINT}/${row.id}/actions`, { action })
+  }
+
+  async function recompute(row: Row) {
+    const batch = window.prompt('请输入指标批次编号', `batch-${row.id}`)
+    if (!batch) {
+      return
+    }
+    const sample = window.prompt('请输入该批次的 avg-sample 采样值', '860')
+    if (sample === null) {
+      return
+    }
+    await post(`${ENDPOINT}/decisions/recompute`, {
+      规则编号: row['规则编号'],
+      批次编号: batch,
+      'avg-sample': Number(sample),
+    })
   }
 
   return (
@@ -142,12 +195,70 @@ export default function AlarmView() {
                     {action}
                   </button>
                 ))}
+                <button className="link" type="button" onClick={() => void recompute(row)}>
+                  重算判定
+                </button>
               </td>
             </tr>
           ))}
           {rows.length === 0 && (
             <tr>
               <td className="empty-state" colSpan={columns.length + 1}>暂无流告警规则数据，可先登记告警规则</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      <h3 className="section-title">告警判定数据结果</h3>
+      <table className="data-table">
+        <thead>
+          <tr>
+            {decisionColumns.map((column) => <th key={column}>{column}</th>)}
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {decisions.map((decision) => (
+            <tr key={String(decision['判定编号'])}>
+              <td>{String(decision['判定编号'] ?? '—')}</td>
+              <td>{String(decision['规则编号'] ?? '—')}</td>
+              <td>{String(decision['指标版本'] ?? '—')}</td>
+              <td>{String(decision['复核结论'] ?? '—')}</td>
+              <td>{String(decision['复核状态'] ?? '—')}</td>
+              <td>{eventText(decision['通知事件'])}</td>
+              <td>{previousVersion(decision['上一条有效结果'])}</td>
+              <td className="row-actions">
+                <button
+                  className="link"
+                  type="button"
+                  onClick={() => void post(`${ENDPOINT}/decisions/${decision['判定编号']}/review`, {
+                    复核结论: '确认告警',
+                  })}
+                >
+                  确认复核
+                </button>
+                <button
+                  className="link"
+                  type="button"
+                  onClick={() => void post(`${ENDPOINT}/decisions/${decision['判定编号']}/review`, {
+                    复核结论: '复核失败',
+                  })}
+                >
+                  复核失败
+                </button>
+                <button
+                  className="link"
+                  type="button"
+                  onClick={() => void post(`${ENDPOINT}/decisions/${decision['判定编号']}/consume`, {})}
+                >
+                  消费
+                </button>
+              </td>
+            </tr>
+          ))}
+          {decisions.length === 0 && (
+            <tr>
+              <td className="empty-state" colSpan={decisionColumns.length + 1}>暂无判定结果，可对规则执行重算</td>
             </tr>
           )}
         </tbody>
